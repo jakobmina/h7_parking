@@ -1,7 +1,9 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import json
 import hashlib
+import os
 import plotly.graph_objects as go
 import plotly.express as px
 from dotenv import load_dotenv
@@ -10,14 +12,12 @@ from gemma_oracle import GemmaMetriplexOracle
 from h7_qml_classifier import H7TernaryClassifier
 
 load_dotenv()
-oracle = GemmaMetriplexOracle()
-classifier = H7TernaryClassifier()
 
 # ══════════════════════════════════════════════════════════════
 #  CONFIG
 # ══════════════════════════════════════════════════════════════
 st.set_page_config(
-    page_title="H7 Parking Violations",
+    page_title="H7 Metriplectic QML",
     page_icon="⚛",
     layout="wide",
 )
@@ -62,326 +62,266 @@ def encode_input(data) -> int:
 def psi(n):       return float(np.cos(PI * phi * n))
 def ternary(v, e=0.25): return 1 if v > e else (-1 if v < -e else 0)
 
-def h7_process(data, epsilon=0.25):
-    n   = encode_input(data)
-    p   = psi(n)
-    t   = ternary(p, epsilon)
-    lbl = {1:"constructive", 0:"equilibrium", -1:"destructive"}
-    return {"n":n, "state_vector":(n,7-n), "psi_value":round(p,6),
-            "ternary_state":t, "binary_fw":BIN_A[n-1],
-            "binary_bw":BIN_B[n-1], "label":lbl[t]}
-
-def classify_row(row, epsilon, domain_prompt):
-    key = f"{row['Registration State']}::{row['Violation Description']}"
-    # Obtenemos densidades métricas del oráculo Gemma 4 (Agnóstico pero guiado por prompt)
-    metrics = oracle.get_initial_phase_state(key, domain_prompt=domain_prompt)
-    rho = metrics["rho"]
-    v = metrics["v"]
-    
-    # H7 QML Computa el Lagrangiano y evalúa el Atractor Ternario (-1, 0, 1)
-    classifier.epsilon = epsilon
-    ternary_class = classifier.fit_predict(rho, v, steps=50, dt=0.1)
-    # Extracción de valores finales
-    final_psi = classifier.history_psi[-1]
-    
-    n = encode_input(key)  # mantenemos n visualmente congruente con el H7 core logic
-    lbl = {1:"constructive", 0:"equilibrium", -1:"destructive"}
-    
-    return pd.Series({"H7_n":n, "H7_state_vector":f"({n},{7-n})",
-                      "H7_psi":final_psi, "H7_ternary":ternary_class,
-                      "H7_binary_FW":BIN_A[n-1], "H7_binary_BW":BIN_B[n-1],
-                      "H7_label":lbl[ternary_class]})
-
 # ══════════════════════════════════════════════════════════════
-#  SIDEBAR — controles
+#  DATA LOADING (Con manejo de errores)
 # ══════════════════════════════════════════════════════════════
-with st.sidebar:
-    st.markdown("## ⚛ H7 Controls")
-    st.caption("smokApp Quantum & AI Lab")
-    st.divider()
-
-    # Selector de origen de Datos
-    data_source = st.radio(
-        "Origen de Datos (Template)",
-        options=["Sintético (Mock Demo)", "NYC Parking Tickets (CSV Local)"],
-        index=0
-    )
-
-    num_rows = st.select_slider(
-        "Tamaño (sintético/muestra)", options=[10_000, 100_000],
-        value=10_000
-    )
-    epsilon = st.slider("Epsilon ε (zona neutra)", 0.05, 0.5, 0.25, 0.05)
-    st.divider()
-    st.markdown("**Ψₙ = cos(π · φ · n)**")
-    psi_ref = pd.DataFrame([
-        {"n":n, "Ψₙ":round(psi(n),4), "ternario":ternary(psi(n),epsilon)}
-        for n in range(1,7)
-    ])
-    st.dataframe(psi_ref, hide_index=True, use_container_width=True)
-
-# ══════════════════════════════════════════════════════════════
-#  DATASET
-# ══════════════════════════════════════════════════════════════
-@st.cache_data
-def generate_data(num_rows):
-    states      = ["NY","NJ","CA","TX"]
-    violations  = ["Double Parking","Expired Meter","No Parking","Fire Hydrant","Bus Stop"]
-    vtypes      = ["SUBN","SDN"]
-    dates       = pd.date_range("2022-01-01","2022-12-31",freq='D')
-    return pd.DataFrame({
-        "Registration State"   : np.random.choice(states,     size=num_rows),
-        "Violation Description": np.random.choice(violations, size=num_rows),
-        "Vehicle Body Type"    : np.random.choice(vtypes,     size=num_rows),
-        "Issue Date"           : np.random.choice(dates,      size=num_rows),
-        "Ticket Number"        : np.random.randint(1_000_000_000,9_999_999_999,size=num_rows),
-    })
-
-@st.cache_data
-def load_real_data(path, sample_size):
-    """
-    PLANTILLA: Carga dataset real (ej. Kaggle NYC Parking Tickets).
-    Neutro y reusable para otros contextos.
-    """
-    try:
-        df = pd.read_csv(path).sample(sample_size)
-        return df
-    except FileNotFoundError:
-        st.error(f"Falta el archivo real CSV en {path}. Recurriendo a sintético.")
-        return generate_data(sample_size)
-
-import json
 @st.cache_data
 def load_sample_dataset():
-    with open("datasets/parking_tickets_sample.json") as f:
-        return json.load(f)
+    """Carga dataset de tickets de estacionamiento de ejemplo."""
+    try:
+        # Intenta cargar desde datasets/ primero
+        if os.path.exists("datasets/parking_tickets_sample.json"):
+            with open("datasets/parking_tickets_sample.json") as f:
+                return json.load(f)
+    except Exception as e:
+        st.warning(f"No se pudo cargar dataset local: {e}")
+    
+    # Fallback: Dataset hardcoded como respaldo
+    return [
+        {
+            "id": 1,
+            "description": "Vehicle double-parked on fire hydrant, blocking emergency access",
+            "context": "Rush hour, school zone, driver called 311",
+            "expected_class": -1,
+            "reasoning": "High danger, no mitigation"
+        },
+        {
+            "id": 2,
+            "description": "Expired parking meter by 3 minutes",
+            "context": "Driver inside store, returned immediately",
+            "expected_class": 0,
+            "reasoning": "Trivial administrative"
+        },
+        {
+            "id": 3,
+            "description": "Parked in no-parking zone during construction detour",
+            "context": "City closed normal street, signage unclear",
+            "expected_class": 1,
+            "reasoning": "Mitigating circumstances"
+        },
+    ]
 
-# Usa esto en lugar de datos sintéticos para demostración real
-tickets = load_sample_dataset()
+@st.cache_resource
+def get_oracle():
+    """Inicializa el Oráculo Gemma una sola vez."""
+    return GemmaMetriplexOracle()
+
+@st.cache_resource
+def get_classifier():
+    """Inicializa el Clasificador H7 una sola vez."""
+    return H7TernaryClassifier()
 
 # ══════════════════════════════════════════════════════════════
-#  HEADER
+#  SIDEBAR
 # ══════════════════════════════════════════════════════════════
-st.markdown("# ⚛ H7 Civic Violations (Gemma Impact Challenge)")
-st.caption(f"Zero-Shot Metriplectic Oracle · φ = {phi:.6f} · ε = {epsilon}")
-st.divider()
-
-with st.spinner("Conectando Oráculo y resolviendo atractores..."):
-    if data_source == "Sintético (Mock Demo)":
-        df = generate_data(num_rows)
-        domain_prompt = "Analiza el contexto de esta infracción de tráfico municipal:"
-    else:
-        # Plantilla: Cambia 'nyc_tickets.csv' por la ruta de tu dataset real del hackathon.
-        df = load_real_data("nyc_tickets.csv", num_rows)
-        domain_prompt = "Analiza el contexto de este reporte oficial de la ciudad:"
-
-    # Solo analizamos los principales casos para no saturar al Oráculo
-    top = (
-        df[["Registration State","Violation Description"]]
-        .value_counts()
-        .groupby("Registration State").head(1)
-        .sort_index().reset_index()
-        .rename(columns={"count":"Frequency"})
+with st.sidebar:
+    st.markdown("## ⚛ H7 Metriplectic Control Panel")
+    st.caption("Safety & Trust Track · Gemma Impact Challenge")
+    st.divider()
+    
+    epsilon = st.slider("Epsilon ε (neutral zone width)", 0.05, 0.5, 0.25, 0.05)
+    num_steps = st.slider("Evolution steps (↑ = more refined)", 20, 100, 50, 10)
+    dt = st.slider("Time step dt", 0.01, 0.2, 0.1, 0.01)
+    
+    st.divider()
+    st.markdown("**Ψₙ Reference Table**")
+    st.markdown("where Ψₙ = cos(π · φ · n)")
+    
+    psi_ref = pd.DataFrame([
+        {"n": n, "Ψₙ": round(psi(n), 4), "Ternary": ternary(psi(n), epsilon)}
+        for n in range(1, 7)
+    ])
+    st.dataframe(psi_ref, hide_index=True, use_container_width=True)
+    
+    st.divider()
+    st.markdown("**About H7**")
+    st.caption(
+        "Metriplectic QML framework bridges AI reasoning (Gemma Oracle) "
+        "with deterministic physics (Lagrangian evolution) for transparent, "
+        "auditable civic governance."
     )
-    h7_cols = top.apply(lambda r: classify_row(r, epsilon, domain_prompt), axis=1)
-    result  = pd.concat([top, h7_cols], axis=1)
 
 # ══════════════════════════════════════════════════════════════
-#  KPI CARDS
+#  MAIN INTERFACE
 # ══════════════════════════════════════════════════════════════
-c1, c2, c3, c4 = st.columns(4)
-label_counts = result["H7_label"].value_counts()
-
-for col, lbl, icon, css in [
-    (c1, "constructive", "▲ +1", "constructive"),
-    (c2, "destructive",  "▼ −1", "destructive"),
-    (c3, "equilibrium",  "◆  0", "equilibrium"),
-    (c4, None,           None,   None),
-]:
-    with col:
-        if lbl:
-            cnt = label_counts.get(lbl, 0)
-            st.markdown(f"""
-            <div class="metric-card {css}">
-              <div style="font-size:22px;font-weight:bold">{icon}</div>
-              <div style="font-size:28px;font-weight:bold">{cnt}</div>
-              <div style="font-size:12px;opacity:.6">{lbl}</div>
-            </div>""", unsafe_allow_html=True)
-        else:
-            st.markdown(f"""
-            <div class="metric-card">
-              <div style="font-size:22px">🎫</div>
-              <div style="font-size:28px;font-weight:bold">{num_rows:,}</div>
-              <div style="font-size:12px;opacity:.6">tickets procesados</div>
-            </div>""", unsafe_allow_html=True)
-
-st.divider()
-
-# ══════════════════════════════════════════════════════════════
-#  TABLA PRINCIPAL
-# ══════════════════════════════════════════════════════════════
-st.markdown("### 📋 Top Infracción por Estado + Clasificación H7")
-
-color_map = {"constructive":"#22c55e", "equilibrium":"#eab308", "destructive":"#ef4444"}
-
-def style_table(df):
-    def row_color(row):
-        c = color_map.get(row["H7_label"],"#fff")
-        return [f"color:{c}" if col=="H7_label" else "" for col in df.columns]
-    return df.style.apply(row_color, axis=1).format({"H7_psi":"{:+.6f}"})
-
-st.dataframe(style_table(result), use_container_width=True, hide_index=True)
-
-# ══════════════════════════════════════════════════════════════
-#  CHARTS
-# ══════════════════════════════════════════════════════════════
-col_a, col_b = st.columns(2)
-
-with col_a:
-    st.markdown("### 📊 Frecuencia de Infracciones")
-    viol_counts = (
-        df.groupby(["Registration State","Violation Description"])
-        .size().reset_index(name="count")
-    )
-    fig1 = px.bar(
-        viol_counts, x="Registration State", y="count",
-        color="Violation Description", barmode="group",
-        template="plotly_dark",
-        color_discrete_sequence=px.colors.qualitative.Bold,
-    )
-    fig1.update_layout(
-        paper_bgcolor="#161b22", plot_bgcolor="#0d1117",
-        legend=dict(font=dict(size=10)),
-        margin=dict(t=20,b=20)
-    )
-    st.plotly_chart(fig1, use_container_width=True)
-
-with col_b:
-    st.markdown("### ⚛ Estado Ternario H7 (distribución)")
-    # Classify every unique state+violation combo
-    all_combos = (
-        df.groupby(["Registration State","Violation Description"])
-        .size().reset_index(name="count")
-    )
-    h7_all = all_combos.apply(lambda r: classify_row(r, epsilon, domain_prompt), axis=1)
-    all_combos = pd.concat([all_combos, h7_all], axis=1)
-
-    dist = all_combos.groupby(["Registration State","H7_label"])["count"].sum().reset_index()
-    fig2 = px.bar(
-        dist, x="Registration State", y="count", color="H7_label",
-        barmode="stack", template="plotly_dark",
-        color_discrete_map=color_map,
-    )
-    fig2.update_layout(
-        paper_bgcolor="#161b22", plot_bgcolor="#0d1117",
-        margin=dict(t=20,b=20)
-    )
-    st.plotly_chart(fig2, use_container_width=True)
-
-st.markdown("### 📈 Phase Space Evolution (single ticket)")
-selected_ticket = st.selectbox("Pick a ticket to inspect...", 
-                                [t["description"] for t in tickets])
-ticket = next(t for t in tickets if t["description"] == selected_ticket)
-
-# Ejecutar clasificador + capturar historial
-metrics = oracle.get_initial_phase_state(ticket["description"])
-rho, v = metrics["rho"], metrics["v"]
-
-# Es necesario instanciar de nuevo o usar el existente
-classifier_single = H7TernaryClassifier()
-ternary_class = classifier_single.fit_predict(rho, v, steps=50, dt=0.1)
-
-# Graficar L_symp + L_metr + L_total
-fig_lag = go.Figure()
-fig_lag.add_trace(go.Scatter(
-    y=classifier_single.history_symp,
-    name="L_symp (Energy)",
-    mode="lines",
-    line=dict(color="#1D9E75")
-))
-fig_lag.add_trace(go.Scatter(
-    y=classifier_single.history_metr,
-    name="L_metr (Entropy)",
-    mode="lines",
-    line=dict(color="#D85A30")
-))
-fig_lag.add_trace(go.Scatter(
-    y=classifier_single.history_psi,
-    name="ψ(t) (State)",
-    mode="lines",
-    line=dict(color="#7F77DD", width=3)
-))
-fig_lag.update_layout(
-    title=f"Metriplectic Evolution: ρ={rho:.2f}, v={v:.2f} → Class {ternary_class:+d}",
-    xaxis_title="Step",
-    yaxis_title="Value",
-    template="plotly_dark",
-    height=400
+st.markdown("# ⚛ H7 Metriplectic QML: Transparent Civic Governance")
+st.markdown(
+    "**Zero-Shot Explainable Classification for Parking Violations** · "
+    f"φ = {phi:.6f} · ε = {epsilon}"
 )
-st.plotly_chart(fig_lag, use_container_width=True)
+st.divider()
 
-# Explicación natural
-st.markdown(f"""
-**Why {['Destructive', 'Equilibrium', 'Constructive'][ternary_class+1]}?**
+# Load data
+tickets = load_sample_dataset()
+oracle = get_oracle()
+classifier_template = get_classifier()
 
-1. Oracle extracted: ρ = {rho:.3f} (severity), v = {v:.3f} (intent)
-2. Initial state: ψ₀ = v · O_n(ρ·10) = {classifier_single.history_psi[0]:.3f}
-3. Dynamics: Energy pushed toward {'+1' if v > 0 else '-1'}, Entropy pulled toward 0
-4. Final: ψ(t=50) = {classifier_single.history_psi[-1]:.3f} → Class {ternary_class:+d}
-""")
-
+st.markdown("## 📋 Sample Parking Violations Analysis")
+st.caption(f"Processing {len(tickets)} tickets through H7 framework...")
 
 # ══════════════════════════════════════════════════════════════
-#  GAUGE Ψₙ por estado
+#  SINGLE TICKET INSPECTOR
 # ══════════════════════════════════════════════════════════════
-st.markdown("### 🔮 Ψₙ por Estado (gauge)")
-gcols = st.columns(len(result))
-for i, (_, row) in enumerate(result.iterrows()):
-    with gcols[i]:
-        pv = row["H7_psi"]
-        c  = color_map[row["H7_label"]]
-        fig = go.Figure(go.Indicator(
-            mode="gauge+number",
-            value=pv,
-            number={"font":{"color":c},"valueformat":"+.4f"},
-            gauge={
-                "axis":{"range":[-1,1],"tickcolor":"#30363d"},
-                "bar":{"color":c},
-                "bgcolor":"#161b22",
-                "bordercolor":"#30363d",
-                "steps":[
-                    {"range":[-1,-epsilon],"color":"#2b0d0d"},
-                    {"range":[-epsilon,epsilon],"color":"#1a1a0d"},
-                    {"range":[epsilon,1],"color":"#0d2b1a"},
-                ],
-                "threshold":{"line":{"color":"#fff","width":2},"value":pv}
-            },
-            title={"text":f"{row['Registration State']}<br><span style='font-size:11px'>{row['Violation Description']}</span>",
-                   "font":{"color":"#8b949e","size":13}},
-        ))
-        fig.update_layout(
-            height=220, margin=dict(t=50,b=10,l=10,r=10),
-            paper_bgcolor="#0d1117", font=dict(color="#c9d1d9")
-        )
-        st.plotly_chart(fig, use_container_width=True)
+st.markdown("### 🔍 Deep Dive: Single Ticket Inspection")
+
+selected_idx = st.selectbox(
+    "Pick a ticket to analyze in detail:",
+    range(len(tickets)),
+    format_func=lambda i: f"#{tickets[i]['id']}: {tickets[i]['description'][:60]}..."
+)
+
+ticket = tickets[selected_idx]
+
+with st.container(border=True):
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.markdown(f"**Ticket #{ticket['id']}**")
+        st.markdown(f"**Description:** {ticket['description']}")
+        st.markdown(f"**Context:** {ticket['context']}")
+        st.markdown(f"**Expected Class:** {ticket['expected_class']}")
+    
+    with col2:
+        st.metric("Expected Outcome", 
+                  {-1: "🔴 Destructive", 0: "🟡 Equilibrium", 1: "🟢 Constructive"}[ticket['expected_class']])
+
+# Run classification
+st.markdown("**▶ Running H7 Classification...**")
+
+metrics = oracle.get_initial_phase_state(ticket["description"])
+rho = metrics["rho"]
+v = metrics["v"]
+
+classifier_single = H7TernaryClassifier(epsilon=epsilon)
+ternary_class = classifier_single.fit_predict(rho, v, steps=num_steps, dt=dt)
+
+col_metrics, col_evolution = st.columns(2)
+
+with col_metrics:
+    st.markdown("### 🎯 Oracle Extraction")
+    st.metric("ρ (Density/Severity)", f"{rho:.4f}")
+    st.metric("v (Velocity/Intent)", f"{v:+.4f}")
+    
+    st.markdown("### 📊 Classification Result")
+    class_label = {-1: "🔴 Destructive", 0: "🟡 Equilibrium", 1: "🟢 Constructive"}[ternary_class]
+    st.metric("Predicted Class", class_label)
+    
+    match = "✅ MATCH" if ternary_class == ticket["expected_class"] else "❌ MISMATCH"
+    st.metric("vs Expected", match)
+
+with col_evolution:
+    st.markdown("### 📈 Phase Space Evolution")
+    
+    fig_lag = go.Figure()
+    steps = range(len(classifier_single.history_psi))
+    
+    fig_lag.add_trace(go.Scatter(
+        x=list(steps), y=classifier_single.history_symp,
+        name="L_symp (Energy)", mode="lines",
+        line=dict(color="#1D9E75", width=2)
+    ))
+    fig_lag.add_trace(go.Scatter(
+        x=list(steps), y=classifier_single.history_metr,
+        name="L_metr (Entropy)", mode="lines",
+        line=dict(color="#D85A30", width=2)
+    ))
+    fig_lag.add_trace(go.Scatter(
+        x=list(steps), y=classifier_single.history_psi,
+        name="ψ(t) (State)", mode="lines+markers",
+        line=dict(color="#7F77DD", width=3),
+        marker=dict(size=4)
+    ))
+    
+    # Add attractor lines
+    fig_lag.add_hline(y=1, line_dash="dash", line_color="green", opacity=0.3, annotation_text="+1 (Constructive)")
+    fig_lag.add_hline(y=-1, line_dash="dash", line_color="red", opacity=0.3, annotation_text="-1 (Destructive)")
+    fig_lag.add_hline(y=0, line_dash="dash", line_color="orange", opacity=0.3)
+    
+    fig_lag.update_layout(
+        title=f"Evolution: ρ={rho:.2f}, v={v:.2f} → Class {ternary_class:+d}",
+        xaxis_title="Step",
+        yaxis_title="Value",
+        template="plotly_dark",
+        height=400,
+        hovermode="x unified"
+    )
+    st.plotly_chart(fig_lag, use_container_width=True)
 
 # ══════════════════════════════════════════════════════════════
-#  COLLISION GROUPS
+#  EXPLANATION
+# ══════════════════════════════════════════════════════════════
+st.markdown("### 📝 Why this classification?")
+
+explanation = f"""
+**Step 1: Oracle Extraction (Gemma 4)**
+- Your ticket description was analyzed by Gemma 4
+- Extracted **ρ = {rho:.4f}** (severity/magnitude of infraction)
+- Extracted **v = {v:+.4f}** (intent/moral direction)
+
+**Step 2: Initial Conditions**
+- Starting state: ψ₀ = v · O_n(ρ·10) = {classifier_single.history_psi[0]:+.4f}
+- Where O_n (Golden Operator) = cos(πn) · cos(πφn) modulates the phase space
+
+**Step 3: Metriplectic Evolution** (50 steps)
+- **Symplectic force** (Energy conservation): dψ/dt = {{ψ, H}} pulls the state according to ρ and v
+- **Metric force** (Entropy dissipation): dψ/dt = [ψ, S] relaxes toward the nearest attractor (-1, 0, or +1)
+- These competing forces create a deterministic trajectory: **ψ(t) → {classifier_single.history_psi[-1]:+.4f}**
+
+**Step 4: Ternary Quantization**
+- Final state ψ(t=50) = {classifier_single.history_psi[-1]:+.4f}
+- Threshold ε = {epsilon}
+- Result: **Class {ternary_class:+d}** = {class_label}
+
+**Why is this transparent?**
+Every step is deterministic, verifiable, and rooted in explicit mathematics.
+An auditor can trace the entire evolution without referring to hidden neural network weights.
+"""
+
+st.markdown(explanation)
+
+# ══════════════════════════════════════════════════════════════
+#  COMPARISON TABLE
 # ══════════════════════════════════════════════════════════════
 st.divider()
-st.markdown("### 🔁 Collision Groups (n compartidos)")
-cg = result.groupby("H7_n").agg(
-    States=("Registration State", list),
-    Violations=("Violation Description", list),
-    Psi=("H7_psi","first"),
-    Label=("H7_label","first"),
-).reset_index()
-cg["Collisions"] = cg["States"].apply(len)
-cg = cg[cg["Collisions"] > 1]
-if cg.empty:
-    st.info("No hay colisiones en este run — todos los estados cayeron en n distintos.")
-else:
-    st.dataframe(cg, use_container_width=True, hide_index=True)
+st.markdown("## 📊 Batch Analysis: All Tickets")
+
+results = []
+for t in tickets:
+    metrics_t = oracle.get_initial_phase_state(t["description"])
+    clf_t = H7TernaryClassifier(epsilon=epsilon)
+    pred = clf_t.fit_predict(metrics_t["rho"], metrics_t["v"], steps=num_steps, dt=dt)
+    
+    results.append({
+        "ID": t["id"],
+        "Description": t["description"][:40] + "...",
+        "ρ": f"{metrics_t['rho']:.3f}",
+        "v": f"{metrics_t['v']:+.3f}",
+        "Predicted": {-1: "🔴 Destructive", 0: "🟡 Equilibrium", 1: "🟢 Constructive"}[pred],
+        "Expected": {-1: "🔴 Destructive", 0: "🟡 Equilibrium", 1: "🟢 Constructive"}[t["expected_class"]],
+        "Match": "✅" if pred == t["expected_class"] else "❌"
+    })
+
+results_df = pd.DataFrame(results)
+st.dataframe(results_df, use_container_width=True, hide_index=True)
+
+# Summary metrics
+st.markdown("### 📈 Summary Statistics")
+col1, col2, col3 = st.columns(3)
+
+matches = sum(1 for r in results if "✅" in r["Match"])
+total = len(results)
+accuracy = matches / total * 100
+
+with col1:
+    st.metric("Total Tickets", total)
+with col2:
+    st.metric("Correct Predictions", f"{matches}/{total}")
+with col3:
+    st.metric("Accuracy", f"{accuracy:.1f}%")
 
 st.divider()
-st.caption("H7 Protocol · Ψₙ = cos(π·φ·n) · smokApp Quantum & AI Lab")
+st.caption(
+    "H7 Metriplectic QML · φ = (1+√5)/2 · "
+    "Gemma Oracle + Lagrangian Evolution · "
+    "Transparent Civic Governance"
+)
