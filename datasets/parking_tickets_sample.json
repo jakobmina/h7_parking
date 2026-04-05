@@ -1,0 +1,23 @@
+[
+  {
+    "id": 1,
+    "description": "Vehicle double-parked on fire hydrant, blocking emergency access",
+    "context": "Rush hour, school zone, driver called 311 but police unavailable",
+    "expected_class": -1,
+    "reasoning": "High danger, no mitigation"
+  },
+  {
+    "id": 2,
+    "description": "Expired meter by 3 minutes",
+    "context": "Driver inside store, meter reached 0, returned immediately after",
+    "expected_class": 0,
+    "reasoning": "Trivial administrative"
+  },
+  {
+    "id": 3,
+    "description": "Parked in no-parking zone during construction detour",
+    "context": "City closed normal street, signage unclear, driver followed GPS",
+    "expected_class": 1,
+    "reasoning": "Mitigating circumstances"
+  }
+]

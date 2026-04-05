@@ -150,6 +150,15 @@ def load_real_data(path, sample_size):
         st.error(f"Falta el archivo real CSV en {path}. Recurriendo a sintético.")
         return generate_data(sample_size)
 
+import json
+@st.cache_data
+def load_sample_dataset():
+    with open("datasets/parking_tickets_sample.json") as f:
+        return json.load(f)
+
+# Usa esto en lugar de datos sintéticos para demostración real
+tickets = load_sample_dataset()
+
 # ══════════════════════════════════════════════════════════════
 #  HEADER
 # ══════════════════════════════════════════════════════════════
@@ -268,6 +277,59 @@ with col_b:
         margin=dict(t=20,b=20)
     )
     st.plotly_chart(fig2, use_container_width=True)
+
+st.markdown("### 📈 Phase Space Evolution (single ticket)")
+selected_ticket = st.selectbox("Pick a ticket to inspect...", 
+                                [t["description"] for t in tickets])
+ticket = next(t for t in tickets if t["description"] == selected_ticket)
+
+# Ejecutar clasificador + capturar historial
+metrics = oracle.get_initial_phase_state(ticket["description"])
+rho, v = metrics["rho"], metrics["v"]
+
+# Es necesario instanciar de nuevo o usar el existente
+classifier_single = H7TernaryClassifier()
+ternary_class = classifier_single.fit_predict(rho, v, steps=50, dt=0.1)
+
+# Graficar L_symp + L_metr + L_total
+fig_lag = go.Figure()
+fig_lag.add_trace(go.Scatter(
+    y=classifier_single.history_symp,
+    name="L_symp (Energy)",
+    mode="lines",
+    line=dict(color="#1D9E75")
+))
+fig_lag.add_trace(go.Scatter(
+    y=classifier_single.history_metr,
+    name="L_metr (Entropy)",
+    mode="lines",
+    line=dict(color="#D85A30")
+))
+fig_lag.add_trace(go.Scatter(
+    y=classifier_single.history_psi,
+    name="ψ(t) (State)",
+    mode="lines",
+    line=dict(color="#7F77DD", width=3)
+))
+fig_lag.update_layout(
+    title=f"Metriplectic Evolution: ρ={rho:.2f}, v={v:.2f} → Class {ternary_class:+d}",
+    xaxis_title="Step",
+    yaxis_title="Value",
+    template="plotly_dark",
+    height=400
+)
+st.plotly_chart(fig_lag, use_container_width=True)
+
+# Explicación natural
+st.markdown(f"""
+**Why {['Destructive', 'Equilibrium', 'Constructive'][ternary_class+1]}?**
+
+1. Oracle extracted: ρ = {rho:.3f} (severity), v = {v:.3f} (intent)
+2. Initial state: ψ₀ = v · O_n(ρ·10) = {classifier_single.history_psi[0]:.3f}
+3. Dynamics: Energy pushed toward {'+1' if v > 0 else '-1'}, Entropy pulled toward 0
+4. Final: ψ(t=50) = {classifier_single.history_psi[-1]:.3f} → Class {ternary_class:+d}
+""")
+
 
 # ══════════════════════════════════════════════════════════════
 #  GAUGE Ψₙ por estado

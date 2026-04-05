@@ -86,17 +86,24 @@ class GemmaMetriplexOracle:
             return {"rho": rho, "v": v}
 
         prompt = f"""
-        Eres un Oráculo Físico Metripléctico.
-        {domain_prompt}
-        "{context}"
-        
-        Evalúa y extrae exclusivamente dos valores en formato JSON estricto:
-        1. "rho": Densidad de impacto o peso real en el sistema (de 0.1 a 1.0).
-        2. "v": Intencionalidad o dirección del flujo asociado (-1.0 a 1.0, donde negativo es perjudicial/destructivo y positivo es ordenado/constructivo).
-        
-        Ejemplo: {{"rho": 0.8, "v": -0.5}}
-        Solo responde con el JSON.
-        """
+Eres un Oráculo de Información Metripléctico para Gobernanza Cívica.
+Analiza esta infracción municipal y extrae dos parámetros físicos:
+
+Contexto: "{context}"
+
+1. **Densidad (ρ)**: Magnitud real/impacto del incidente [0.1 a 1.0]
+   - 0.1-0.3: Trivial/administrativo (ej "Meter expirado")
+   - 0.3-0.7: Moderado (ej "Estacionamiento doble")
+   - 0.7-1.0: Crítico (ej "Bloqueando acceso de emergencia")
+
+2. **Velocidad/Intencionalidad (v)**: Dirección moral [-1.0 a 1.0]
+   - -1.0: Claramente malintencionado/peligroso
+   - -0.5 a 0: Negligencia o infracción sin excusa
+   - 0 a +0.5: Casos grises, hay mitigantes
+   - +1.0: Circunstancias atenuantes documentadas
+
+Responde SOLO JSON: {{"rho": 0.X, "v": -0.X}}
+"""
 
         try:
             if self.use_offline_onnx and self.local_onnx_pipeline:
