@@ -1,0 +1,10 @@
+streamlit
+pandas
+numpy
+plotly
+python-dotenv
+pytest
+google-cloud-aiplatform
+onnxruntime
+transformers
+optimum

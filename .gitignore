@@ -1,0 +1,29 @@
+# Entorno virtual y dependencias
+.env
+.venv/
+env/
+venv/
+__pycache__/
+*.pyc
+
+# IDEs locales y editores
+.vscode/
+.idea/
+.spyderproject
+
+# Logs y Cachés locales
+.pytest_cache/
+.coverage
+*.log
+
+# Datos
+# Ocultar CSVs grandes de Kaggle para evitar saturar el repositorio
+*.csv
+*.tsv
+*.xlsx
+# Permitir específicamente algún archivo miniatura o schema si se requiere
+# !sample_data.csv
+
+# Archivos específicos de OS
+.DS_Store
+Thumbs.db
